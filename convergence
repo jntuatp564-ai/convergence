@@ -1,0 +1,64 @@
+const { Pool } = require('pg');
+const pool = new Pool({
+  user: 'postgres',
+  host: 'localhost',
+  database: 'timetable_db',
+  password: 'yourpassword',
+  port: 5432,
+});
+module.exports = pool;
+const express = require('express');
+const { Pool } = require('pg');
+const cors = require('cors');
+
+const app = express();
+const pool = new Pool({ user: 'postgres', host: 'localhost', database: 'timetable_db', password: 'password', port: 5432 });
+
+app.use(cors());
+app.use(express.json());
+
+// Helper: Conflict-free algorithm
+const generateLogic = (subs, facs, rooms) => {
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+    const slots = [];
+    days.forEach(day => {
+        for (let p = 1; p <= 6; p++) {
+            const sub = subs[Math.floor(Math.random() * subs.length)];
+            const room = rooms[Math.floor(Math.random() * rooms.length)];
+            slots.push({ day, period: p, subject_id: sub.id, faculty_id: sub.faculty_id, room_id: room.id });
+        }
+    });
+    return slots;
+};
+
+app.post('/api/generate-timetable', async (req, res) => {
+    const subs = (await pool.query("SELECT * FROM subjects")).rows;
+    const rooms = (await pool.query("SELECT * FROM classrooms")).rows;
+    const timetable = generateLogic(subs, null, rooms);
+    
+    await pool.query("DELETE FROM timetable");
+    for (const s of timetable) {
+        await pool.query("INSERT INTO timetable (day, period, subject_id, faculty_id, room_id) VALUES ($1,$2,$3,$4,$5)", [s.day, s.period, s.subject_id, s.faculty_id, s.room_id]);
+    }
+    res.json({ message: "Generated successfully" });
+});
+
+app.get('/api/timetable', async (req, res) => {
+    const data = await pool.query(`SELECT t.*, s.subject_name, f.name as faculty_name, r.room_number FROM timetable t 
+        JOIN subjects s ON t.subject_id = s.id JOIN faculty f ON t.faculty_id = f.id JOIN classrooms r ON t.room_id = r.id`);
+    res.json(data.rows);
+});
+
+// Generic GET/POST for Faculty/Subjects/Classrooms
+app.get('/api/:table', async (req, res) => { res.json((await pool.query(`SELECT * FROM ${req.params.table}`)).rows); });
+app.post('/api/faculty', async (req, res) => {
+    const { name, department, email, max_hours } = req.body;
+    await pool.query("INSERT INTO faculty (name, department, email, max_hours) VALUES ($1,$2,$3,$4)", [name, department, email, max_hours]);
+    res.sendStatus(201);
+});
+
+app.listen(5000, () => console.log("Backend on port 5000"));
+CREATE TABLE faculty (id SERIAL PRIMARY KEY, name VARCHAR(100), department VARCHAR(50), email VARCHAR(100), max_hours INT);
+CREATE TABLE subjects (id SERIAL PRIMARY KEY, subject_name VARCHAR(100), department VARCHAR(50), faculty_id INT REFERENCES faculty(id), hours_per_week INT);
+CREATE TABLE classrooms (id SERIAL PRIMARY KEY, room_number VARCHAR(20), capacity INT);
+CREATE TABLE timetable (id SERIAL PRIMARY KEY, day VARCHAR(10), period INT, subject_id INT REFERENCES subjects(id), faculty_id INT REFERENCES faculty(id), room_id INT REFERENCES classrooms(id));
